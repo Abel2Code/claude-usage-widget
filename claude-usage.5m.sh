@@ -22,16 +22,24 @@ SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 # file so the dropdown toggle can change it. Defaults to session-only.
 CONFIG_DIR="$HOME/.config/claude-usage-widget"
 MODE_FILE="$CONFIG_DIR/menubar_mode"
+RESET_FILE="$CONFIG_DIR/menubar_reset"
 
-# Toggle handler: invoked as `script --set-mode <mode>` by the dropdown buttons.
+# Toggle handlers: invoked as `script --set-mode <mode>` or `--set-reset <on|off>`.
 if [ "${1:-}" = "--set-mode" ] && [ -n "${2:-}" ]; then
   mkdir -p "$CONFIG_DIR"
   printf '%s' "$2" > "$MODE_FILE"
   exit 0
 fi
+if [ "${1:-}" = "--set-reset" ] && [ -n "${2:-}" ]; then
+  mkdir -p "$CONFIG_DIR"
+  printf '%s' "$2" > "$RESET_FILE"
+  exit 0
+fi
 
 MODE="$(cat "$MODE_FILE" 2>/dev/null || echo session)"
 case "$MODE" in session|weekly|both) ;; *) MODE="session" ;; esac
+SHOW_RESET="$(cat "$RESET_FILE" 2>/dev/null || echo off)"
+case "$SHOW_RESET" in on|off) ;; *) SHOW_RESET="off" ;; esac
 
 TOKEN="$(security find-generic-password -s claude-usage-widget -a oauth -w 2>/dev/null)"
 
@@ -53,11 +61,12 @@ HEADERS="$(curl -sS --max-time 15 -o /dev/null -D - https://api.anthropic.com/v1
   -H "content-type: application/json" \
   -d '{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"."}]}' 2>&1)"
 
-HEADERS_RAW="$HEADERS" MODE="$MODE" SELF="$SELF" python3 <<'PY'
+HEADERS_RAW="$HEADERS" MODE="$MODE" SHOW_RESET="$SHOW_RESET" SELF="$SELF" python3 <<'PY'
 import os, sys, re, time, datetime
 
 USAGE_URL = "https://claude.ai/settings/usage"
 MODE = os.environ.get("MODE", "session")
+SHOW_RESET = os.environ.get("SHOW_RESET", "off") == "on"
 SELF = os.environ.get("SELF", "")
 raw = os.environ.get("HEADERS_RAW", "")
 
@@ -147,6 +156,12 @@ elif MODE == "both":
     title_emoji, title_txt = emoji(worst), " · ".join(bits)
 else:  # session (default)
     title_emoji, title_txt = emoji(sp), (f"S {sp}%" if sp is not None else "S —")
+
+# Optionally append the reset countdown for whichever limit is shown.
+if SHOW_RESET:
+    reset_cd = countdown(w_reset if MODE == "weekly" else s_reset)
+    if reset_cd:
+        title_txt = f"{title_txt} ⟳ {reset_cd}"
 print(f"{title_emoji} {title_txt}")
 
 # --- Dropdown ---
@@ -172,6 +187,8 @@ print("Menu bar shows | size=11 color=#888888")
 for key, label in (("session", "Session %"), ("weekly", "Weekly %"), ("both", "Both")):
     mark = "✓ " if MODE == key else "    "
     print(f"{mark}{label} | bash=\"{SELF}\" param1=--set-mode param2={key} terminal=false refresh=true")
+mark = "✓ " if SHOW_RESET else "    "
+print(f"{mark}Reset countdown | bash=\"{SELF}\" param1=--set-reset param2={'off' if SHOW_RESET else 'on'} terminal=false refresh=true")
 print("---")
 print("Refresh now | refresh=true")
 print(f"Open usage page | href={USAGE_URL}")
